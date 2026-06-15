@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Layout, Typography, Row, Col, Space, Badge, Spin, Empty, Tag } from 'antd';
-import { EnvironmentOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Layout, Typography, Row, Col, Space, Badge, Spin, Empty, Tag, Divider } from 'antd';
+import { EnvironmentOutlined, ThunderboltOutlined, WarningOutlined } from '@ant-design/icons';
 import { useFermenterStream } from './hooks/useFermenterStream';
 import { FermenterCard } from './components/FermenterCard';
 import { TemperatureChart } from './components/TemperatureChart';
 import { ValvePanel } from './components/ValvePanel';
+import { RedlineAlertCard } from './components/RedlineAlertCard';
 import type { FermenterStreamData } from './types';
 import './App.css';
 
@@ -54,15 +55,21 @@ function App() {
   }, [selected, selectedId]);
 
   const summary = useMemo(() => {
-    if (data.length === 0) return { stable: 0, warn: 0, alarm: 0 };
-    let stable = 0, warn = 0, alarm = 0;
+    if (data.length === 0) return { stable: 0, warn: 0, alarm: 0, redline: 0 };
+    let stable = 0, warn = 0, alarm = 0, redline = 0;
     data.forEach(f => {
       const diff = Math.abs(f.info.current_temp - f.info.target_temp);
-      if (diff > 0.5) alarm++;
+      const isRedline = f.redline_alert?.triggered && f.redline_alert?.gradual_steps?.length > 0;
+      if (isRedline) redline++;
+      else if (diff > 0.5) alarm++;
       else if (diff > 0.2) warn++;
       else stable++;
     });
-    return { stable, warn, alarm };
+    return { stable, warn, alarm, redline };
+  }, [data]);
+
+  const redlineFermenters = useMemo(() => {
+    return data.filter(f => f.redline_alert?.triggered && f.redline_alert?.gradual_steps?.length > 0);
   }, [data]);
 
   return (
@@ -90,6 +97,14 @@ function App() {
             <Badge status="success" text={<span style={{ color: '#4ade80' }}>正常 {summary.stable}</span>} />
             <Badge status="warning" text={<span style={{ color: '#fbbf24' }}>预警 {summary.warn}</span>} />
             <Badge status="error" text={<span style={{ color: '#f87171' }}>告警 {summary.alarm}</span>} />
+            {summary.redline > 0 && (
+              <Badge color="red" text={
+                <span style={{ color: '#ef4444', fontWeight: 600 }}>
+                  <WarningOutlined style={{ marginRight: 4 }} />
+                  红线 {summary.redline}
+                </span>
+              } />
+            )}
           </Space>
           <Space align="center">
             <Spin size="small" spinning={!connected} />
@@ -111,6 +126,26 @@ function App() {
             padding: 16
           }}
         >
+          {redlineFermenters.length > 0 && (
+            <>
+              <Title level={5} style={{ color: '#ef4444', margin: '0 0 10px 0' }}>
+                <WarningOutlined style={{ marginRight: 6 }} />
+                红线预警 ({redlineFermenters.length})
+              </Title>
+              <Space direction="vertical" size={10} style={{ width: '100%', marginBottom: 12 }}>
+                {redlineFermenters.map(f => (
+                  <RedlineAlertCard
+                    key={f.info.id}
+                    alert={f.redline_alert}
+                    fermenterName={f.info.name}
+                    currentValve={f.info.current_valve}
+                  />
+                ))}
+              </Space>
+              <Divider style={{ margin: '8px 0', borderColor: '#334155' }} />
+            </>
+          )}
+
           <Title level={5} style={{ color: '#cbd5e1', margin: '0 0 12px 0' }}>
             发酵罐列表 ({data.length})
           </Title>
@@ -150,6 +185,11 @@ function App() {
                         {selected.info.name} — 温度趋势
                       </Title>
                       <Tag color="blue">目标 {selected.info.target_temp}°C</Tag>
+                      {selected.redline_alert?.triggered && selected.redline_alert?.gradual_steps?.length > 0 && (
+                        <Tag color="red" icon={<WarningOutlined />}>
+                          红线 {selected.redline_alert.redline_temp}°C
+                        </Tag>
+                      )}
                     </Space>
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       过去 2 小时实测 · 未来 15 分钟预测

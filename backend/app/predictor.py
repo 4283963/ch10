@@ -2,9 +2,9 @@ import numpy as np
 import pandas as pd
 import warnings
 from datetime import datetime, timedelta
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
-from .models import FermenterDataPoint, PredictionPoint, ValveAdjustment
+from .models import FermenterDataPoint, PredictionPoint, ValveAdjustment, GradualAdjustmentStep, RedlineAlert
 
 
 np.seterr(all='warn')
@@ -303,3 +303,167 @@ class TemperaturePredictor:
                 "mean_derivative": 0.0,
                 "stability_score": 50.0,
             }
+
+    def compute_redline_alert(
+        self,
+        history: List[FermenterDataPoint],
+        prediction: List[PredictionPoint],
+        redline_temp: float = 37.5
+    ) -> RedlineAlert:
+        try:
+            if not history or not prediction:
+                return RedlineAlert(
+                    triggered=False,
+                    redline_temp=redline_temp,
+                    current_slope=0.0,
+                    slope_steepening=False,
+                    gradual_steps=[],
+                    overshoot_margin=0.0,
+                )
+
+            current_temp = float(history[-1].temperature)
+            current_valve = float(history[-1].valve_opening)
+
+            if not self._is_finite(current_temp) or not self._is_finite(current_valve):
+                return RedlineAlert(triggered=False, redline_temp=redline_temp)
+
+            breach_minute = None
+            for p in prediction[:5]:
+                if self._is_finite(p.temperature) and p.temperature >= redline_temp:
+                    idx = prediction.index(p) + 1
+                    breach_minute = idx
+                    break
+
+            if breach_minute is None and current_temp < redline_temp:
+                return RedlineAlert(
+                    triggered=False,
+                    redline_temp=redline_temp,
+                    current_slope=0.0,
+                    slope_steepening=False,
+                    gradual_steps=[],
+                    overshoot_margin=0.0,
+                )
+
+            temps = np.array([dp.temperature for dp in history], dtype=np.float64)
+            derivatives = self.compute_sliding_derivative(temps)
+            valid_deriv = derivatives[np.isfinite(derivatives)]
+
+            current_slope = 0.0
+            slope_steepening = False
+
+            if len(valid_deriv) >= 3:
+                recent_slope = float(valid_deriv[-1])
+                if self._is_finite(recent_slope):
+                    current_slope = max(-5.0, min(5.0, recent_slope))
+
+                recent_3 = valid_deriv[-3:]
+                if len(recent_3) >= 3:
+                    d1, d2, d3 = float(recent_3[0]), float(recent_3[1]), float(recent_3[2])
+                    if self._is_finite(d1) and self._is_finite(d2) and self._is_finite(d3):
+                        if d3 > d2 > d1 and d3 > 0:
+                            slope_steepening = True
+
+            if not slope_steepening and current_slope <= 0:
+                return RedlineAlert(
+                    triggered=True,
+                    redline_temp=redline_temp,
+                    breach_minutes=breach_minute,
+                    current_slope=round(current_slope, 6),
+                    slope_steepening=False,
+                    gradual_steps=[],
+                    overshoot_margin=0.0,
+                )
+
+            steps = self._compute_gradual_steps(
+                current_temp=current_temp,
+                current_valve=current_valve,
+                current_slope=current_slope,
+                slope_steepening=slope_steepening,
+                redline_temp=redline_temp,
+                breach_minute=breach_minute,
+            )
+
+            final_valve = steps[-1].valve_opening if steps else current_valve
+            overshoot_margin = self._estimate_overshoot_margin(
+                current_temp, current_slope, current_valve, final_valve
+            )
+
+            return RedlineAlert(
+                triggered=True,
+                redline_temp=redline_temp,
+                breach_minutes=breach_minute,
+                current_slope=round(current_slope, 6),
+                slope_steepening=slope_steepening,
+                gradual_steps=steps,
+                overshoot_margin=round(overshoot_margin, 3),
+            )
+
+        except Exception as e:
+            print(f"[ERROR] compute_redline_alert failed: {e}")
+            return RedlineAlert(triggered=False, redline_temp=redline_temp)
+
+    def _compute_gradual_steps(
+        self,
+        current_temp: float,
+        current_valve: float,
+        current_slope: float,
+        slope_steepening: bool,
+        redline_temp: float,
+        breach_minute: Optional[int],
+    ) -> List[GradualAdjustmentStep]:
+        temp_gap = redline_temp - current_temp
+        if temp_gap <= 0:
+            total_adjustment = abs(current_slope) * 80 + 25
+        else:
+            time_to_redline = breach_minute if breach_minute else max(1, temp_gap / max(current_slope, 0.001))
+            total_adjustment = (temp_gap / max(time_to_redline, 0.5)) * 60 + abs(current_slope) * 40
+
+        if slope_steepening:
+            total_adjustment *= 1.4
+
+        total_adjustment = min(total_adjustment, 85.0 - current_valve)
+        total_adjustment = max(0.0, total_adjustment)
+
+        final_valve = min(95.0, current_valve + total_adjustment)
+
+        ramp_profile = [0.15, 0.20, 0.25, 0.22, 0.18]
+        cumulative = 0.0
+        steps: List[GradualAdjustmentStep] = []
+
+        for minute in range(1, 6):
+            weight = ramp_profile[minute - 1]
+            increment = total_adjustment * weight
+            cumulative += increment
+            valve_at_step = min(95.0, current_valve + cumulative)
+
+            if minute == 1:
+                note = "初始小幅试探，避免冷媒冲击引发热振荡"
+            elif minute == 2:
+                note = "观察夹套换热响应，逐步加量"
+            elif minute == 3:
+                note = "主调节量注入，抑制温升惯性"
+            elif minute == 4:
+                note = "微调收敛，锁定稳态区间"
+            else:
+                note = "末段修正，消除残余超调趋势"
+
+            steps.append(GradualAdjustmentStep(
+                minute=minute,
+                valve_opening=round(valve_at_step, 2),
+                increment=round(increment, 2),
+                note=note,
+            ))
+
+        return steps
+
+    def _estimate_overshoot_margin(
+        self,
+        current_temp: float,
+        current_slope: float,
+        current_valve: float,
+        final_valve: float,
+    ) -> float:
+        cooling_gain = (final_valve - current_valve) * 0.0012
+        thermal_inertia = current_slope * 3.0
+        residual_heat = max(0.0, current_slope * 2.0 - cooling_gain * 2.0)
+        return residual_heat

@@ -8,7 +8,7 @@ from typing import List
 
 from .models import (
     FermenterInfo, FermenterStatus, FermenterDataPoint,
-    PredictionPoint, ValveAdjustment
+    PredictionPoint, ValveAdjustment, RedlineAlert
 )
 from .timeseries_db import TimeSeriesDBSimulator
 from .predictor import TemperaturePredictor
@@ -68,6 +68,7 @@ async def get_fermenter_status(fid: str):
 
     latest = history[-1]
     prediction, valve_adj = predictor.predict_temperature(history, cfg.get("target_temp", 37.0))
+    redline_alert = predictor.compute_redline_alert(history, prediction, redline_temp=37.5)
 
     return FermenterStatus(
         info=FermenterInfo(
@@ -81,6 +82,7 @@ async def get_fermenter_status(fid: str):
         history=history,
         prediction=prediction,
         valve_adjustment=valve_adj,
+        redline_alert=redline_alert,
     )
 
 
@@ -112,6 +114,7 @@ async def websocket_stream(websocket: WebSocket):
                 latest = history[-1]
                 prediction, valve_adj = predictor.predict_temperature(history, cfg.get("target_temp", 37.0))
                 stability = predictor.analyze_stability(history, cfg.get("target_temp", 37.0))
+                redline_alert = predictor.compute_redline_alert(history, prediction, redline_temp=37.5)
 
                 all_status.append({
                     "info": {
@@ -140,6 +143,23 @@ async def websocket_stream(websocket: WebSocket):
                         "reason": valve_adj.reason,
                     },
                     "stability": stability,
+                    "redline_alert": {
+                        "triggered": redline_alert.triggered,
+                        "redline_temp": redline_alert.redline_temp,
+                        "breach_minutes": redline_alert.breach_minutes,
+                        "current_slope": redline_alert.current_slope,
+                        "slope_steepening": redline_alert.slope_steepening,
+                        "gradual_steps": [
+                            {
+                                "minute": s.minute,
+                                "valve_opening": s.valve_opening,
+                                "increment": s.increment,
+                                "note": s.note,
+                            }
+                            for s in redline_alert.gradual_steps
+                        ],
+                        "overshoot_margin": redline_alert.overshoot_margin,
+                    },
                 })
 
             payload = json.dumps({

@@ -40,6 +40,15 @@ async function fetchAllFermenters(): Promise<FermenterStreamData[]> {
             mean_derivative: stability.mean_derivative,
             stability_score: stability.stability_score,
           },
+          redline_alert: detail.redline_alert || {
+            triggered: false,
+            redline_temp: 37.5,
+            breach_minutes: null,
+            current_slope: 0,
+            slope_steepening: false,
+            gradual_steps: [],
+            overshoot_margin: 0,
+          },
         });
       } catch (e) {
         console.error(`Failed to fetch ${info.id}:`, e);

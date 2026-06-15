@@ -34,12 +34,30 @@ export interface StabilityAnalysis {
   stability_score: number;
 }
 
+export interface GradualAdjustmentStep {
+  minute: number;
+  valve_opening: number;
+  increment: number;
+  note: string;
+}
+
+export interface RedlineAlert {
+  triggered: boolean;
+  redline_temp: number;
+  breach_minutes: number | null;
+  current_slope: number;
+  slope_steepening: boolean;
+  gradual_steps: GradualAdjustmentStep[];
+  overshoot_margin: number;
+}
+
 export interface FermenterStreamData {
   info: FermenterInfo;
   latest_history: DataPoint;
   prediction: PredictionPoint[];
   valve_adjustment: ValveAdjustment;
   stability: StabilityAnalysis;
+  redline_alert: RedlineAlert;
 }
 
 export interface StreamPayload {

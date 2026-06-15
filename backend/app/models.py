@@ -32,8 +32,26 @@ class ValveAdjustment(BaseModel):
     reason: str
 
 
+class GradualAdjustmentStep(BaseModel):
+    minute: int
+    valve_opening: float
+    increment: float
+    note: str
+
+
+class RedlineAlert(BaseModel):
+    triggered: bool
+    redline_temp: float
+    breach_minutes: Optional[int] = None
+    current_slope: float = 0.0
+    slope_steepening: bool = False
+    gradual_steps: List[GradualAdjustmentStep] = []
+    overshoot_margin: float = 0.0
+
+
 class FermenterStatus(BaseModel):
     info: FermenterInfo
     history: List[FermenterDataPoint]
     prediction: List[PredictionPoint]
     valve_adjustment: Optional[ValveAdjustment] = None
+    redline_alert: Optional[RedlineAlert] = None

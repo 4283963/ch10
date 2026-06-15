@@ -1,0 +1,19 @@
+.ant-card {
+  background: rgba(30, 41, 59, 0.6);
+}
+
+.ant-card-head {
+  border-bottom-color: #334155;
+}
+
+.ant-card-head-title {
+  color: #f1f5f9;
+}
+
+.ant-layout-header {
+  backdrop-filter: blur(8px);
+}
+
+.ant-progress-text {
+  color: #cbd5e1;
+}
